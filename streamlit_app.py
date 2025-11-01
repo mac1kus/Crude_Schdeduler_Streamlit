@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import os
 import re
 import math
+import requests
 
 
 # Try to import Excel support libraries
@@ -77,9 +78,22 @@ def safe_read_csv(filepath, **kwargs):
         return None
 
 def load_data(folder_path):
-    """Load simulation data from CSV and Excel files"""
-    import time
-    time.sleep(0.1)
+    """Load simulation data by downloading from Flask service"""
+    
+    FLASK_URL = "https://crude-schdeduler-streamlit.onrender.com"
+    
+    # Download CSVs from Flask
+    os.makedirs(folder_path, exist_ok=True)
+    
+    for filename in ['simulation_log.csv', 'daily_summary.csv', 'cargo_report.csv', 'tank_snapshots.csv']:
+        try:
+            response = requests.get(f"{FLASK_URL}/download/{filename}")
+            if response.status_code == 200:
+                with open(os.path.join(folder_path, filename), 'wb') as f:
+                    f.write(response.content)
+        except:
+            pass  # File might not exist yet
+    
     crude_mix = {}
     processing_rate_html = None
     try:
