@@ -7,6 +7,7 @@ import os
 import re
 import math
 
+
 # Try to import Excel support libraries
 try:
     import openpyxl
@@ -78,7 +79,7 @@ def safe_read_csv(filepath, **kwargs):
 def load_data(folder_path):
     """Load simulation data from CSV and Excel files"""
     import time
-    time.sleep(0.1)  # Small delay to ensure file is fully written
+    time.sleep(0.1)
     crude_mix = {}
     processing_rate_html = None
     try:
