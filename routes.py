@@ -1766,7 +1766,7 @@ def register_routes(app):
         has finished downloading it from the server.
         """
         # Define the base directory (always /tmp on Render)
-        directory_path = "/tmp"
+        directory_path = os.path.expanduser("~/Downloads")
         
         try:
             # 1. Security Check: Prevent path traversal (e.g., trying to access ../../etc/passwd)
