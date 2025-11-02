@@ -843,6 +843,8 @@ def main():
         else:
             st.warning("No crude mix data found in simulation log READY_1 events.")
     
+    # streamlit_app.py (REPLACEMENT for lines 657-737)
+
     tab_idx += 1
     
     # Events Log tab
@@ -850,47 +852,50 @@ def main():
         if log_df is not None and not log_df.empty:
             st.subheader("All Events")
             
-            # --- START FIX ---
+            # --- START FIX: Correct sorting and full log search ---
             
-            # 1. Take the last 500 events (log_df is already sorted by datetime in load_data)
-            # We use .copy() to avoid any SettingWithCopyWarning
-            filtered_log = log_df.tail(500).copy()
+            # 1. Create a copy of the full log_df.
+            # (log_df is already sorted by a true datetime in the load_data function)
+            display_df = log_df.copy()
             
             # 2. Search functionality
             col1, col2 = st.columns([3, 1])
             with col1:
-                search = st.text_input("🔍 Search events", "", placeholder="Type to filter events...")
+                search = st.text_input("🔍 Search events", "", placeholder="Type to filter all events...")
             with col2:
                 show_all = st.checkbox("Show all columns", value=False)
             
             if search:
-                # 3. Apply search mask *before* formatting timestamp
-                mask = pd.Series([False] * len(filtered_log))
-                for col in filtered_log.columns:
-                    if col == 'Timestamp': # Skip search on the datetime object itself
+                # 3. Apply search mask to the ENTIRE log (before formatting timestamp)
+                mask = pd.Series([False] * len(display_df))
+                for col in display_df.columns:
+                    if col == 'Timestamp': # Skip search on the datetime object
                         continue
-                    if filtered_log[col].dtype == 'object':
-                        mask |= filtered_log[col].str.contains(search, case=False, na=False)
+                    if display_df[col].dtype == 'object':
+                        mask |= display_df[col].str.contains(search, case=False, na=False)
                     else:
                         # Convert other columns (like numbers) to string to search
-                        mask |= filtered_log[col].astype(str).str.contains(search, case=False, na=False)
-                filtered_log = filtered_log[mask]
-            
-            # 4. Determine which columns to display
-            if show_all:
-                display_cols = list(filtered_log.columns)
+                        mask |= display_df[col].astype(str).str.contains(search, case=False, na=False)
+                display_df = display_df[mask]
             else:
-                # Show only the most relevant columns
-                possible_cols = ['Timestamp', 'Level', 'Event', 'Tank', 'Cargo', 'Message']
-                display_cols = [col for col in possible_cols if col in filtered_log.columns]
+                # 4. If NOT searching, *then* limit the view to the last 1000 lines for performance.
+                #    (You can change 1000 to whatever limit you want, or remove it to show all)
+                display_df = display_df.tail(1000)
             
-            # 5. Format timestamp to string *after* all sorting/filtering is done
-            if 'Timestamp' in filtered_log.columns:
-                filtered_log['Timestamp'] = filtered_log['Timestamp'].dt.strftime('%d/%m/%Y %H:%M')
+            # 5. Determine which columns to display
+            if show_all:
+                display_cols = list(display_df.columns)
+            else:
+                possible_cols = ['Timestamp', 'Level', 'Event', 'Tank', 'Cargo', 'Message']
+                display_cols = [col for col in possible_cols if col in display_df.columns]
+            
+            # 6. Format timestamp to string *AFTER* all sorting/filtering is done
+            if 'Timestamp' in display_df.columns:
+                display_df['Timestamp'] = display_df['Timestamp'].dt.strftime('%d/%m/%Y %H:%M')
             
             # --- END FIX ---
             
-            if not filtered_log.empty:
+            if not display_df.empty:
                 st.markdown("""
                 <style>
                     .dataframe {
@@ -903,12 +908,13 @@ def main():
                 </style>
                 """, unsafe_allow_html=True)
                 
-                # 6. Display the DataFrame *without* re-sorting it
+                # 7. Display the DataFrame. It is already sorted.
+                #    DO NOT call .sort_values() here.
                 st.dataframe(
-                    filtered_log[display_cols].reset_index(drop=True), # REMOVED .sort_values()
+                    display_df[display_cols].reset_index(drop=True), # This is now chronologically correct
                     width='stretch',
                     height=400,
-                    hide_index=True # Changed from False to True for cleaner display
+                    hide_index=True
                 )
             else:
                 st.info("No events found matching your criteria")
