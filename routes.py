@@ -1338,34 +1338,28 @@ def register_routes(app):
         """Displays the main scheduler page."""
         return render_template('index.html')
 
+   
+    @app.route('/api/simulate', methods=['POST'])
     @app.route('/api/simulate', methods=['POST'])
     def simulate():
         """
-        API endpoint that runs the simulation.
-        If optimization is requested, it runs the solver first and passes the
-        results to the main simulator.
+        Runs simulation, including all original configuration, and returns 
+        data directly as JSON (including the main CSV content string).
         """
         try:
             params = request.json
             if not params:
                 return jsonify({'error': 'No data provided'}), 400
 
-            # Check if an optimized schedule should be used.
+            # 1. --- Solver Logic ---
             if params.get('use_optimized_schedule'):
-
-                # 1. Call the solver to generate the schedule.
                 solver_results = optimize_crude_mix_schedule(params)
-
-                # 2. Check for solver errors and return a clear message if it fails.
                 if not solver_results or not solver_results.get('success'):
                     error_message = solver_results.get('error', 'Solver failed to produce a valid plan.')
                     return jsonify({'success': False, 'error': error_message}), 400
-
-                # 3. Add the solver's output to the parameters for the main simulator.
                 params['solver_results'] = solver_results
             
-            # --- PREPARE SIMULATOR CONFIG (CFG) ---
-            # This block is the same as your old routes1.py, it prepares the data.
+            # 2. --- PREPARE SIMULATOR CONFIG (CFG) --- (RESTORED BLOCK)
             try:
                 # Calculate Usable Volume
                 unusable_part = safe_float(params.get('defaultDeadBottom', 10000), 10000, 'defaultDeadBottom') + \
@@ -1375,7 +1369,6 @@ def register_routes(app):
                 initial_tank_levels = {}
                 num_tanks = safe_int(params.get('numTanks'), param_name='numTanks')
 
-                # Add validation for number of tanks
                 if num_tanks <= 0:
                     return jsonify({'success': False, 'error': 'Number of tanks must be greater than zero.'}), 400
 
@@ -1419,7 +1412,7 @@ def register_routes(app):
             except (KeyError, ValueError) as e:
                 return jsonify({'error': f'Invalid or missing parameter: {str(e)}'}), 400
 
-            # --- RUN THE SIMULATION ---
+            # 3. --- RUN SIMULATION & DIRECT DATA RETURN ---
             sim = Simulator(cfg)
             sim.run()
 
@@ -1428,42 +1421,13 @@ def register_routes(app):
 
             sim.generate_cargo_report()
             sim.daily_log_rows.sort(key=lambda x: datetime.strptime(x["Timestamp"], "%d/%m/%Y %H:%M"))
-            sim.save_csvs()
             
-            # Get ALL CSV files created by save_csvs() - using broader pattern
-            import glob
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-            # Try multiple patterns to catch all CSV files
-            csv_files = []
-            
-            # Pattern 1: Files with timestamp
-            csv_files.extend(glob.glob(f"/tmp/*_{timestamp}.csv"))
-            
-            # Pattern 2: Common CSV filenames (in case timestamp format differs)
-            csv_patterns = [
-                "/tmp/tank_snap_shots*.csv",
-                "/tmp/simulation_log*.csv", 
-                "/tmp/daily_summary*.csv",
-                "/tmp/cargo_report*.csv"
-            ]
-            
-            for pattern in csv_patterns:
-                matching_files = glob.glob(pattern)
-                # Add only files modified in last 10 seconds (recently created)
-                import time
-                current_time = time.time()
-                for f in matching_files:
-                    if os.path.exists(f) and (current_time - os.path.getmtime(f)) < 10:
-                        if f not in csv_files:
-                            csv_files.append(f)
-            
-            csv_download_urls = {}
-            if csv_files:
-                for csv_file in csv_files:
-                    filename = os.path.basename(csv_file)
-                    csv_download_urls[filename] = f"/download/{filename}"
-
+            # Get the CSV content string (REQUIRES NEW METHOD IN SIMULATOR CLASS)
+            try:
+                main_report_csv_string = sim.get_main_report_as_csv_string() 
+            except AttributeError:
+                 main_report_csv_string = "" 
+                 print("WARNING: sim.get_main_report_as_csv_string() method is missing!")
 
             alerts = []
             for log_entry in sim.daily_log_rows:
@@ -1471,9 +1435,11 @@ def register_routes(app):
                     day_num = (datetime.strptime(log_entry['Timestamp'], "%d/%m/%Y %H:%M") - cfg['start_dt']).days + 1
                     alerts.append({"day": day_num, "type": log_entry.get("Level").lower(), "message": log_entry.get("Message")})
 
+            # Return the data, including the CSV string, to Streamlit
             return jsonify({
                 'success': True,
-                'csv_files': csv_download_urls,
+                'main_report_csv': main_report_csv_string, # <--- The critical data transfer key
+                
                 'daily_summary': sim.daily_summary_rows,
                 'cargo_report': sim.cargo_report_rows,
                 'simulation_log': sim.daily_log_rows,
@@ -1485,6 +1451,7 @@ def register_routes(app):
             })
 
         except Exception as e:
+            # ... (Your existing error handling logic) ...
             import traceback
             error_details = traceback.format_exc()
             print(f"\nERROR: Exception in simulate endpoint:\n{error_details}")
@@ -1762,7 +1729,7 @@ def register_routes(app):
     def download_file(filename):
         """
         Download simulation results using send_from_directory for robustness.
-        Uses call_on_close to ensure the file is deleted *after* the browser 
+        Uses call_on_close to ensure the file is deleted *after* the browser
         has finished downloading it from the server.
         """
         # Define the base directory (always /tmp on Render)

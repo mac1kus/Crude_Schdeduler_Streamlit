@@ -8,6 +8,7 @@ import csv
 import os
 import re
 import random
+import io
 
 try:
     import openpyxl
@@ -1435,6 +1436,36 @@ class Simulator:
     def _sort_log_chronologically(self):
         """Sort all log entries by timestamp"""
         self.daily_log_rows.sort(key=lambda x: datetime.strptime(x["Timestamp"], "%d/%m/%Y %H:%M"))
+
+    def get_main_report_as_csv_string(self):
+        """
+        Converts the daily_summary_rows (list of dicts) into a single CSV 
+        formatted string in memory for API transfer.
+        """
+        
+        # Use the data source Streamlit needs (e.g., daily_summary_rows)
+        data_to_export = self.daily_summary_rows 
+        
+        if not data_to_export:
+            # If there's no data, return an empty string
+            return ""
+
+        # Get the field names (CSV headers) from the keys of the first dictionary
+        try:
+            fieldnames = list(data_to_export[0].keys())
+        except (IndexError, AttributeError):
+            # Handle case where data_to_export is empty or not a list of dicts
+            return ""
+        
+        # Use io.StringIO to capture the CSV output in a string variable
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        
+        writer.writeheader()
+        writer.writerows(data_to_export)
+        
+        # Return the complete CSV string from the StringIO object
+        return output.getvalue()
 
     def save_csvs(self, log_path="simulation_log.csv", 
                   summary_path="daily_summary.csv",

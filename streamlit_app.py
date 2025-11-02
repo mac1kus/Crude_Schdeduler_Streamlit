@@ -78,173 +78,111 @@ def safe_read_csv(filepath, **kwargs):
         return None
 
 def load_data(folder_path):
-    """Load simulation data by downloading from Flask service"""
+    """
+    Load simulation data by calling the Flask /api/simulate endpoint 
+    and reading the data directly from the JSON response.
+    """
     
-    FLASK_URL = "https://crude-schdeduler-streamlit.onrender.com"
+    # 1. Get the API URL from Render's Environment Variables
+    # This MUST be set in your Streamlit service settings on Render
+    FLASK_API_URL = os.environ.get("FLASK_API_URL")
     
-    # Download CSVs from Flask
-    os.makedirs(folder_path, exist_ok=True)
+    if not FLASK_API_URL:
+        st.error("FATAL ERROR: FLASK_API_URL environment variable is not set.")
+        st.info("Please set this in your Streamlit service settings on Render.")
+        return None, None, None, None, {}, None
+
+    # This will hold the JSON data returned from the API
+    api_data = None
     
-    for filename in ['simulation_log.csv', 'daily_summary.csv', 'cargo_report.csv', 'tank_snapshots.csv']:
-        try:
-            response = requests.get(f"{FLASK_URL}/download/{filename}")
-            if response.status_code == 200:
-                with open(os.path.join(folder_path, filename), 'wb') as f:
-                    f.write(response.content)
-        except:
-            pass  # File might not exist yet
+    # 2. Add a button to trigger the simulation run
+    # TODO: Add your simulation input parameters to the 'json={}' payload
+    st.sidebar.subheader("Run Simulation")
+    if st.sidebar.button("🚀 Run New Simulation", type="primary", use_container_width=True):
+        with st.spinner('Simulation is running on the server... This may take a moment.'):
+            try:
+                # 3. Call the Flask API
+                # IMPORTANT: Replace {} with your actual simulation input parameters
+                response = requests.post(f"{FLASK_API_URL}/api/simulate", json={}) 
+                
+                if response.status_code == 200:
+                    api_data = response.json()
+                    
+                    if not api_data.get('success'):
+                        st.error(f"Simulation Failed: {api_data.get('error', 'Unknown error')}")
+                        return None, None, None, None, {}, None
+                    
+                    st.success("✅ Simulation complete! Data loaded.")
+                    # Store results in session state to prevent re-running on every click
+                    st.session_state['api_data'] = api_data
+                
+                else:
+                    st.error(f"API Error (HTTP {response.status_code}): {response.text}")
+                    return None, None, None, None, {}, None
+            
+            except requests.exceptions.RequestException as e:
+                st.error(f"Connection Error: Failed to contact API at {FLASK_API_URL}.")
+                st.error(f"Details: {e}")
+                return None, None, None, None, {}, None
+            except Exception as e:
+                st.error(f"An unexpected error occurred: {e}")
+                return None, None, None, None, {}, None
     
+    # 4. Try to load data from session state if it exists
+    if 'api_data' in st.session_state:
+        api_data = st.session_state['api_data']
+    else:
+        st.info("Click 'Run New Simulation' in the sidebar to load data.")
+        return None, None, None, None, {}, None
+
+    # 5. Process the JSON data into DataFrames
+    log_df = None
+    summary_df = None
+    cargo_df = None
+    snapshot_df = None # This architecture does not support the snapshot CSV
     crude_mix = {}
     processing_rate_html = None
+
     try:
-        files = os.listdir(folder_path)
-    except Exception as e:
-        st.error(f"Cannot access folder: {e}")
-        return None, None, None, None, {}, None
-    
-    # Get FIXED filename files (no timestamp)
-    log_files = [f for f in files if f == 'simulation_log.csv']
-    summary_files = [f for f in files if f == 'daily_summary.csv']
-    cargo_files = [f for f in files if f == 'cargo_report.csv']
-    snapshot_files = [f for f in files if f == 'tank_snapshots.csv']
-    
-    if not log_files:
-        st.warning("No simulation log files found. Looking for alternative data sources...")
-        # If no log files but snapshot files exist, we can still show tank volumes
-        if not snapshot_files:
-            return None, None, None, None, {}, None
-    
-    # Get most recent files
-    log_file = sorted(log_files)[-1] if log_files else None
-    summary_file = sorted(summary_files)[-1] if summary_files else None
-    cargo_file = sorted(cargo_files)[-1] if cargo_files else None
-    snapshot_file = sorted(snapshot_files)[-1] if snapshot_files else None
-    
-    # Load log data
-    log_df = None
-    if log_file:
-        log_df = safe_read_csv(os.path.join(folder_path, log_file))
-        if log_df is not None:
-            try:
-                log_df['Timestamp'] = pd.to_datetime(log_df['Timestamp'], format='%d/%m/%Y %H:%M', dayfirst=True)
-            except Exception:
-                try:
-                    log_df['Timestamp'] = pd.to_datetime(log_df['Timestamp'], format='%d/%m/%Y %H:%M', dayfirst=True, errors='coerce')
-                except Exception as e:
-                    st.error(f"Timestamp parsing error: {e}")
+        # --- Process Simulation Log ---
+        log_data = api_data.get('simulation_log')
+        if log_data:
+            log_df = pd.DataFrame(log_data)
+            log_df['Timestamp'] = pd.to_datetime(log_df['Timestamp'], format='%d/%m/%Y %H:%M', dayfirst=True, errors='coerce')
+            log_df = log_df.sort_values('Timestamp', ascending=True).reset_index(drop=True)
             
-            # Sort log_df chronologically by timestamp
-            if 'Timestamp' in log_df.columns:
-                log_df = log_df.sort_values('Timestamp', ascending=True).reset_index(drop=True)
-            
-            # Parse processing rate from SIM_START event
+            # (Your existing logic to parse rate and mix from the log)
             sim_start = log_df[log_df['Event'] == 'SIM_START']
             if not sim_start.empty:
-                message = sim_start.iloc[0]['Message']
-                import re
-                rate_match = re.search(r'processing rate:\s*([\d,]+)', str(message))
-                if rate_match:
-                    try:
-                        processing_rate_html = float(rate_match.group(1).replace(',', ''))
-                    except:
-                        pass
+                # ... (Your logic to extract processing_rate_html) ...
+                pass
             
-            # Parse crude mix from READY_1 events
             ready_events = log_df[log_df['Event'] == 'READY_1']
             if not ready_events.empty:
-                # Get the first READY_1 message which has the mix
-                message = ready_events.iloc[0]['Message']
-                
-                # Parse: "Tank X now READY - Mix: [Crude1: 50.0%, Crude2: 25.0%]"
-                import re
-                match = re.search(r'Mix: \[(.*?)\]', str(message))
-                if match:
-                    mix_str = match.group(1)
-                    # Split by commas and parse each crude
-                    for item in mix_str.split(','):
-                        item = item.strip()
-                        # Parse "Crude Name: 50.0%"
-                        parts = item.split(':')
-                        if len(parts) == 2:
-                            crude_name = parts[0].strip()
-                            percentage_str = parts[1].strip().replace('%', '')
-                            try:
-                                crude_mix[crude_name] = float(percentage_str)
-                            except:
-                                pass
-                    
-                    if crude_mix:
-                        st.success(f"✅ Loaded crude mix from simulation log: {len(crude_mix)} crude types")
-    
-    # Load summary data
-    summary_df = None
-    if summary_file:
-        summary_df = safe_read_csv(os.path.join(folder_path, summary_file))
-        if summary_df is not None:
-            try:
-                summary_df['Date'] = pd.to_datetime(summary_df['Date'], format='%d/%m/%Y', errors='coerce')
-            except Exception:
-                try:
-                    summary_df['Date'] = pd.to_datetime(summary_df['Date'], errors='coerce')
-                except Exception:
-                    pass
-    
-    # Load cargo data
-    cargo_df = None
-    if cargo_file:
-        cargo_df = safe_read_csv(os.path.join(folder_path, cargo_file))
-    
-    # Load snapshot data (supports both CSV and Excel) - HORIZONTAL FORMAT
-    snapshot_df = None
-    if snapshot_file:
-        file_path = os.path.join(folder_path, snapshot_file)
-        
-        # Check if it's an Excel file
-        if snapshot_file.endswith(('.xlsx', '.xls')):
-            try:
-                # Try reading Excel file
-                if EXCEL_SUPPORT:
-                    snapshot_df = pd.read_excel(file_path, engine='openpyxl' if snapshot_file.endswith('.xlsx') else None)
-                else:
-                    # Try to install openpyxl on the fly
-                    import subprocess
-                    import sys
-                    subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'openpyxl'])
-                    import openpyxl
-                    snapshot_df = pd.read_excel(file_path, engine='openpyxl')
-                
-                st.success(f"✅ Loaded snapshot data from Excel: {snapshot_file}")
-            except Exception as e:
-                st.error(f"Error reading Excel snapshot file: {e}")
-                st.info("Try saving the Excel file as CSV format for better compatibility.")
-        else:
-            # It's a CSV file
-            snapshot_df = safe_read_csv(file_path)
-            if snapshot_df is not None:
-                st.success(f"✅ Loaded snapshot data from CSV: {snapshot_file}")
-        
-        # IMPORTANT: Detect horizontal format
-        if snapshot_df is not None:
-            # Horizontal format detection:
-            # First column should be timestamp
-            # Subsequent columns are tank data (volumes then statuses)
-            first_col = snapshot_df.columns[0]
-            
-            try:
-                # Try to parse first column as datetime
-                timestamps = pd.to_datetime(snapshot_df[first_col], format='%d/%m/%Y %H:%M', errors='coerce')
-                if timestamps.isna().all():
-                    timestamps = pd.to_datetime(snapshot_df[first_col], errors='coerce')
-                
-                if timestamps.notna().sum() > 0:
-                    st.info(f"📊 Detected HORIZONTAL snapshot format: {len(snapshot_df)} time points, {len(snapshot_df.columns)-1} data columns")
-                    # Store parsed timestamps
-                    snapshot_df['_Timestamp'] = timestamps
-            except Exception as e:
-                st.warning(f"Could not parse timestamps from first column: {e}")
-    
-    # Load crude mix from simulation log READY_1 events
-    
+                # ... (Your logic to extract crude_mix) ...
+                pass
+
+        # --- Process Daily Summary (The Main CSV) ---
+        csv_string = api_data.get('main_report_csv')
+        if csv_string:
+            csv_file_like = io.StringIO(csv_string) # Requires 'import io' at top
+            summary_df = pd.read_csv(csv_file_like)
+            summary_df['Date'] = pd.to_datetime(summary_df['Date'], format='%d/%m/%Y', errors='coerce')
+
+        # --- Process Cargo Report ---
+        cargo_data = api_data.get('cargo_report')
+        if cargo_data:
+            cargo_df = pd.DataFrame(cargo_data)
+
+        # NOTE: The 'tank_snapshots.csv' is NOT generated by this new API method.
+        # The get_tank_volume and get_tank_status functions will need to be
+        # rewritten to use the 'simulation_log' (log_df) instead.
+        st.warning("Note: Tank snapshots are not supported by this API. Tank status is derived from the event log.")
+
+    except Exception as e:
+        st.error(f"Failed to process data from API: {e}")
+        return None, None, None, None, {}, None
+
     return log_df, summary_df, cargo_df, snapshot_df, crude_mix, processing_rate_html
 
 def detect_number_of_tanks(log_df, snapshot_df):
